@@ -16,6 +16,7 @@ class Question(Base):
     n_statements = Column(Integer, nullable=True)
     none_as_an_option = Column(Boolean, nullable=True)
     negative_question = Column(Boolean, nullable=True)
+    international = Column(Boolean, nullable=True, index=True)
 
     variants = relationship("Variant", back_populates="question", cascade="all, delete-orphan")
 

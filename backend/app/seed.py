@@ -13,6 +13,52 @@ CONFIGS = [
     "open_question",
 ]
 
+INTERNATIONAL_COURSES = {
+    # Private (15)
+    "US Business Law",
+    "Chinesisches Wirtschaftsrecht",
+    "Internationales Privatrecht",
+    "International Commercial Arbitration",
+    "Chinese Business Law",
+    "Comparative Private Law",
+    "International Sales Law",
+    "History of Business Law",
+    "Foundations and Trusts",
+    "Privatrechtsgeschichte",
+    "Antike Rechtsgeschichte",
+    "Europäisches Privatrecht",
+    "Internationales Zivilverfahrensrecht",
+    "Introduction to Sports Law",
+    "Principles of Corporate Law",
+    "Comparative Corporate Law",
+    # Public (14)
+    "Migrationsrecht",
+    "Kirchenrechtsgeschichte und Kirchenrecht",
+    "Sicherheits-, Polizei-, und Menschenrechte",
+    "Recht der Gewaltanwendung und Humanitäres Völkerrecht",
+    "Rechtsphilosophie",
+    "International Organisations",
+    "Recht und Religion",
+    "European Economic Law",
+    "International Finance Law",
+    "Transnational Public Security Law",
+    "International Financial Law",
+    "International Human Rights",
+    "International Economic Law",
+    "Verfassungsgeschichte der Neuzeit",
+    "Internationales Steuerrecht",
+    "Comparative Constitutional Law",
+    # Criminal (3)
+    "International Criminal Law",
+    "Internationales und Europäisches Strafrecht",
+    "Internationale Rechtshilfe in Strafsachen",
+    # Interdisciplinary (4)
+    "Wirtschaftsrechtsgeschichte",
+    "Rechtsgeschichte",
+    "Legal Theory",
+    "Legal Sociology",
+}
+
 
 def seed():
     Base.metadata.create_all(bind=engine)
@@ -58,6 +104,7 @@ def seed():
                         n_statements=row.get("n_statements"),
                         none_as_an_option=row.get("none_as_an_option"),
                         negative_question=row.get("negative_question"),
+                        international=row["course"] in INTERNATIONAL_COURSES,
                     )
                     db.add(q)
 
@@ -90,6 +137,30 @@ def seed():
     q_count = db.query(Question).count()
     db.close()
     print(f"Total: {q_count} questions, {total_variants} variants")
+
+
+def backfill_international():
+    """Add the international column if missing and populate it from course names."""
+    from sqlalchemy import inspect, text
+
+    db = SessionLocal()
+    inspector = inspect(engine)
+    columns = [c["name"] for c in inspector.get_columns("questions")]
+
+    if "international" not in columns:
+        db.execute(text("ALTER TABLE questions ADD COLUMN international BOOLEAN"))
+        db.execute(text("CREATE INDEX ix_questions_international ON questions (international)"))
+        db.commit()
+        print("Added 'international' column to questions table.")
+
+    # Backfill any NULL rows
+    nulls = db.query(Question).filter(Question.international.is_(None)).count()
+    if nulls > 0:
+        for q in db.query(Question).filter(Question.international.is_(None)):
+            q.international = q.course in INTERNATIONAL_COURSES
+        db.commit()
+        print(f"Backfilled international flag for {nulls} questions.")
+    db.close()
 
 
 if __name__ == "__main__":

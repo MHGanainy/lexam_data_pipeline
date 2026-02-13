@@ -6,13 +6,14 @@ from sqlalchemy import func, select
 
 from app.database import Base, engine, get_db
 from app.models import Question, Variant
-from app.seed import seed
+from app.seed import seed, backfill_international
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
     seed()
+    backfill_international()
     yield
 
 
@@ -32,6 +33,7 @@ _QUESTION_COLUMNS = {
     "course": Question.course,
     "jurisdiction": Question.jurisdiction,
     "year": Question.year,
+    "international": Question.international,
 }
 _VARIANT_COLUMNS = {
     "config": Variant.config,
@@ -62,6 +64,9 @@ def _apply_filters(query, filters: dict, skip_field: str | None = None,
 
     if "negative_question" != skip_field and filters.get("negative_question") is not None:
         query = query.filter(Question.negative_question == filters["negative_question"])
+
+    if "international" != skip_field and filters.get("international") is not None:
+        query = query.filter(Question.international == filters["international"])
 
     return query
 
@@ -100,6 +105,7 @@ _SORTABLE_COLUMNS = {
     "language": Question.language,
     "year": Question.year,
     "negative_question": Question.negative_question,
+    "international": Question.international,
     "question": Question.question,
 }
 
@@ -114,6 +120,7 @@ def list_questions(
     jurisdiction: list[str] | None = Query(None),
     year: list[int] | None = Query(None),
     negative_question: bool | None = None,
+    international: bool | None = None,
     sort_by: str | None = None,
     sort_dir: str = "asc",
     offset: int = Query(0, ge=0),
@@ -129,6 +136,7 @@ def list_questions(
         "jurisdiction": jurisdiction,
         "year": year,
         "negative_question": negative_question,
+        "international": international,
     }
 
     q = db.query(Question).options(joinedload(Question.variants))
@@ -191,6 +199,65 @@ def get_stats(db: Session = Depends(get_db)):
         "by_language": by_language,
         "by_year": by_year,
     }
+
+
+@app.get("/api/course-summary")
+def get_course_summary(db: Session = Depends(get_db)):
+    """Per-course breakdown: area, jurisdiction, international, mcq_4, mcq_all, open_qa, language."""
+    rows = (
+        db.query(
+            Question.course, Question.area, Question.jurisdiction,
+            Question.international, Question.language, Question.id,
+            Variant.config, Variant.split,
+        )
+        .join(Variant)
+        .all()
+    )
+
+    courses: dict = {}
+    for course, area, juris, intl, lang, qid, config, split in rows:
+        if course not in courses:
+            courses[course] = {
+                "course": course, "area": area,
+                "jurisdictions": set(), "international": intl,
+                "languages": set(),
+                "mcq4": set(), "mcq_all": set(),
+                "open": set(), "open_dev": set(), "open_test": set(),
+            }
+        courses[course]["jurisdictions"].add(juris)
+        courses[course]["languages"].add(lang)
+        if config == "mcq_4_choices":
+            courses[course]["mcq4"].add(qid)
+        if config in ("mcq_4_choices", "mcq_8_choices", "mcq_16_choices", "mcq_32_choices"):
+            courses[course]["mcq_all"].add(qid)
+        if config == "open_question":
+            courses[course]["open"].add(qid)
+            if split == "dev":
+                courses[course]["open_dev"].add(qid)
+            elif split == "test":
+                courses[course]["open_test"].add(qid)
+
+    result = []
+    for c in courses.values():
+        langs = c["languages"]
+        lang_label = "both" if len(langs) > 1 else next(iter(langs))
+        total = len(c["mcq4"] | c["mcq_all"] | c["open"])
+        result.append({
+            "course": c["course"],
+            "area": c["area"],
+            "jurisdiction": ", ".join(sorted(c["jurisdictions"])),
+            "international": bool(c["international"]),
+            "mcq_4": len(c["mcq4"]),
+            "mcq_all": len(c["mcq_all"]),
+            "open_qa": len(c["open"]),
+            "open_dev": len(c["open_dev"]),
+            "open_test": len(c["open_test"]),
+            "total": total,
+            "language": lang_label,
+        })
+
+    result.sort(key=lambda x: (x["area"], -x["total"]))
+    return result
 
 
 @app.get("/api/dashboard")
@@ -353,6 +420,7 @@ def get_filters(
     jurisdiction: list[str] | None = Query(None),
     year: list[int] | None = Query(None),
     negative_question: bool | None = None,
+    international: bool | None = None,
     db: Session = Depends(get_db),
 ):
     active = {
@@ -364,6 +432,7 @@ def get_filters(
         "jurisdiction": jurisdiction,
         "year": year,
         "negative_question": negative_question,
+        "international": international,
     }
     return {
         "configs": _viable_values(db, "config", active),
@@ -388,6 +457,7 @@ def _serialize(row: Question) -> dict:
         "n_statements": row.n_statements,
         "none_as_an_option": row.none_as_an_option,
         "negative_question": row.negative_question,
+        "international": row.international,
         "variants": [
             {
                 "config": v.config,

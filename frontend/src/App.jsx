@@ -129,6 +129,7 @@ export default function App() {
   const [course, setCourse] = useState(null);
   const [year, setYear] = useState(null);
   const [negativeQuestion, setNegativeQuestion] = useState("");
+  const [international, setInternational] = useState("");
   const [offset, setOffset] = useState(0);
   const [sortBy, setSortBy] = useState(null);
   const [sortDir, setSortDir] = useState("asc");
@@ -145,8 +146,9 @@ export default function App() {
     if (course?.length) course.forEach((c) => params.append("course", c));
     if (year?.length) year.forEach((y) => params.append("year", y));
     if (negativeQuestion !== "") params.set("negative_question", negativeQuestion);
+    if (international !== "") params.set("international", international);
     return params;
-  }, [config, split, area, language, course, year, negativeQuestion]);
+  }, [config, split, area, language, course, year, negativeQuestion, international]);
 
   // Fetch stats once
   useEffect(() => {
@@ -184,7 +186,7 @@ export default function App() {
 
   useEffect(() => {
     setOffset(0);
-  }, [config, split, area, language, course, year, negativeQuestion, sortBy, sortDir]);
+  }, [config, split, area, language, course, year, negativeQuestion, international, sortBy, sortDir]);
 
   const handleSort = useCallback((field) => {
     if (sortBy === field) {
@@ -228,6 +230,7 @@ export default function App() {
     setCourse(null);
     setYear(null);
     setNegativeQuestion("");
+    setInternational("");
     setSortBy(null);
     setSortDir("asc");
   }, []);
@@ -239,7 +242,8 @@ export default function App() {
     (language !== null && language.length > 0) ||
     (course !== null && course.length > 0) ||
     (year !== null && year.length > 0) ||
-    negativeQuestion !== "";
+    negativeQuestion !== "" ||
+    international !== "";
 
   if (view === "dashboard") {
     return (
@@ -324,6 +328,11 @@ export default function App() {
           <option value="true">Yes</option>
           <option value="false">No</option>
         </select>
+        <select value={international} onChange={(e) => setInternational(e.target.value)}>
+          <option value="">International</option>
+          <option value="true">Yes</option>
+          <option value="false">No</option>
+        </select>
         <button className="reset-btn" disabled={!hasActiveFilters} onClick={resetFilters}>
           Reset
         </button>
@@ -345,6 +354,7 @@ export default function App() {
                   <SortTh field="language" label="Lang" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} />
                   <SortTh field="year" label="Year" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} />
                   <SortTh field="negative_question" label="Neg?" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} />
+                  <SortTh field="international" label="Intl?" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} />
                   <SortTh field="question" label="Question" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} />
                 </tr>
               </thead>
@@ -378,6 +388,7 @@ export default function App() {
                     <td><span className="badge badge-lang">{row.language}</span></td>
                     <td>{row.year}</td>
                     <td>{row.negative_question === true ? "Y" : row.negative_question === false ? "N" : "—"}</td>
+                    <td>{row.international === true ? "Y" : row.international === false ? "N" : "—"}</td>
                     <td className="question-text">{row.question}</td>
                   </tr>
                 ))}
@@ -409,6 +420,7 @@ export default function App() {
               <span className="badge">{selected.course}</span>
               <span className="badge">{selected.year}</span>
               <span className="badge">{selected.jurisdiction}</span>
+              {selected.international && <span className="badge">International</span>}
             </div>
             <div className="question-full">{selected.question}</div>
 

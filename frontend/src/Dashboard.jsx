@@ -10,6 +10,7 @@ const API = "/api";
 const AREA_COLORS = { Private: "#2563eb", Public: "#dc2626", Criminal: "#f59e0b", Interdisciplinary: "#10b981" };
 const JURIS_COLORS = { Swiss: "#dc2626", International: "#2563eb", Generic: "#6b7280" };
 const AREA_ORDER = ["Private", "Public", "Criminal", "Interdisciplinary"];
+const TYPE_COLORS = { "Open-Ended": "#6366f1", "MCQ": "#f97316" };
 
 const CustomTooltip = ({ active, payload, label }) => {
   if (!active || !payload?.length) return null;
@@ -85,18 +86,23 @@ const HeatCell = ({ value, max }) => {
 };
 
 /* ── Reusable Dashboard Panel ─────────────────────────────── */
-function DashboardPanel({ configs, title, numOffset = 0 }) {
+function DashboardPanel({ configs, configOptions, title, numOffset = 0 }) {
   const [data, setData] = useState(null);
   const [langFilter, setLangFilter] = useState("all");
   const [activeTab, setActiveTab] = useState("overview");
   const [showTopN, setShowTopN] = useState(20);
+  const [configMode, setConfigMode] = useState(configOptions ? configOptions[0].id : null);
+
+  const activeConfigs = configOptions
+    ? configOptions.find((o) => o.id === configMode)?.configs || configs
+    : configs;
 
   useEffect(() => {
     const params = new URLSearchParams();
-    if (configs) configs.forEach((c) => params.append("config", c));
+    if (activeConfigs) activeConfigs.forEach((c) => params.append("config", c));
     if (langFilter !== "all") params.append("language", langFilter);
     fetch(`${API}/dashboard?${params}`).then((r) => r.json()).then(setData);
-  }, [configs, langFilter]);
+  }, [activeConfigs, langFilter]);
 
   const topCourses = useMemo(() => {
     if (!data) return [];
@@ -161,16 +167,31 @@ function DashboardPanel({ configs, title, numOffset = 0 }) {
             <h2 style={{ fontSize: "1.4rem", fontWeight: 700, color: "#1a1a2e", margin: "0 0 4px" }}>{title}</h2>
             <p style={{ fontSize: 13, color: "#666", lineHeight: 1.5 }}>{subtitle}</p>
           </div>
-          <div style={{ display: "flex", gap: 2, background: "#eee", borderRadius: 6, padding: 2 }}>
-            {langButtons.map((b) => (
-              <button key={b.id} onClick={() => setLangFilter(b.id)} style={{
-                padding: "5px 12px", borderRadius: 4, border: "none",
-                cursor: "pointer", fontSize: 11, fontWeight: 600, transition: "all 0.15s",
-                background: langFilter === b.id ? "#fff" : "transparent",
-                color: langFilter === b.id ? "#1a1a2e" : "#999",
-                boxShadow: langFilter === b.id ? "0 1px 3px rgba(0,0,0,0.1)" : "none",
-              }}>{b.label}</button>
-            ))}
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            {configOptions && (
+              <div style={{ display: "flex", gap: 2, background: "#eee", borderRadius: 6, padding: 2 }}>
+                {configOptions.map((o) => (
+                  <button key={o.id} onClick={() => setConfigMode(o.id)} style={{
+                    padding: "5px 12px", borderRadius: 4, border: "none",
+                    cursor: "pointer", fontSize: 11, fontWeight: 600, transition: "all 0.15s",
+                    background: configMode === o.id ? "#fff" : "transparent",
+                    color: configMode === o.id ? "#1a1a2e" : "#999",
+                    boxShadow: configMode === o.id ? "0 1px 3px rgba(0,0,0,0.1)" : "none",
+                  }}>{o.label}</button>
+                ))}
+              </div>
+            )}
+            <div style={{ display: "flex", gap: 2, background: "#eee", borderRadius: 6, padding: 2 }}>
+              {langButtons.map((b) => (
+                <button key={b.id} onClick={() => setLangFilter(b.id)} style={{
+                  padding: "5px 12px", borderRadius: 4, border: "none",
+                  cursor: "pointer", fontSize: 11, fontWeight: 600, transition: "all 0.15s",
+                  background: langFilter === b.id ? "#fff" : "transparent",
+                  color: langFilter === b.id ? "#1a1a2e" : "#999",
+                  boxShadow: langFilter === b.id ? "0 1px 3px rgba(0,0,0,0.1)" : "none",
+                }}>{b.label}</button>
+              ))}
+            </div>
           </div>
         </div>
         <div style={{ display: "flex", gap: 4, marginTop: 12 }}>
@@ -547,9 +568,367 @@ function DashboardPanel({ configs, title, numOffset = 0 }) {
   );
 }
 
+/* ── Comparison Panel ─────────────────────────────────────── */
+function ComparisonPanel() {
+  const [oeData, setOeData] = useState(null);
+  const [mcqData, setMcqData] = useState(null);
+  const [langFilter, setLangFilter] = useState("all");
+  const [mcqMode, setMcqMode] = useState("mcq_4");
+
+  const mcqConfigs = mcqMode === "mcq_4"
+    ? ["mcq_4_choices"]
+    : ["mcq_4_choices", "mcq_8_choices", "mcq_16_choices", "mcq_32_choices"];
+
+  useEffect(() => {
+    const fetchType = (configs) => {
+      const params = new URLSearchParams();
+      configs.forEach((c) => params.append("config", c));
+      if (langFilter !== "all") params.append("language", langFilter);
+      return fetch(`${API}/dashboard?${params}`).then((r) => r.json());
+    };
+    Promise.all([
+      fetchType(["open_question"]),
+      fetchType(mcqConfigs),
+    ]).then(([oe, mcq]) => { setOeData(oe); setMcqData(mcq); });
+  }, [langFilter, mcqMode]);
+
+  const areaComparison = useMemo(() => {
+    if (!oeData || !mcqData) return [];
+    const map = {};
+    oeData.areas.forEach((a) => { map[a.name] = { area: a.name, "Open-Ended": a.value, "MCQ": 0 }; });
+    mcqData.areas.forEach((a) => {
+      if (!map[a.name]) map[a.name] = { area: a.name, "Open-Ended": 0, "MCQ": 0 };
+      map[a.name]["MCQ"] = a.value;
+    });
+    return AREA_ORDER.map((a) => map[a]).filter(Boolean);
+  }, [oeData, mcqData]);
+
+  const yearComparison = useMemo(() => {
+    if (!oeData || !mcqData) return [];
+    const map = {};
+    oeData.years.forEach((y) => { map[y.year] = { year: y.year, "Open-Ended": y.total || 0, "MCQ": 0 }; });
+    mcqData.years.forEach((y) => {
+      if (!map[y.year]) map[y.year] = { year: y.year, "Open-Ended": 0, "MCQ": 0 };
+      map[y.year]["MCQ"] = y.total || 0;
+    });
+    return Object.values(map).sort((a, b) => a.year - b.year);
+  }, [oeData, mcqData]);
+
+  const courseComparison = useMemo(() => {
+    if (!oeData || !mcqData) return [];
+    const map = {};
+    oeData.courses.forEach((c) => {
+      map[c.course] = { course: c.course, area: c.area, open: c.count, mcq: 0, total: c.count };
+    });
+    mcqData.courses.forEach((c) => {
+      if (!map[c.course]) map[c.course] = { course: c.course, area: c.area, open: 0, mcq: 0, total: 0 };
+      map[c.course].mcq = c.count;
+      map[c.course].total = map[c.course].open + c.count;
+    });
+    return Object.values(map).sort((a, b) => b.total - a.total);
+  }, [oeData, mcqData]);
+
+  if (!oeData || !mcqData) {
+    return (
+      <div style={{ border: "1px solid #e0e0e0", borderRadius: 12, padding: 28, background: "#fafbfc", marginBottom: 32 }}>
+        <h2 style={{ fontSize: "1.4rem", fontWeight: 700, color: "#1a1a2e", margin: "0 0 12px" }}>Open-Ended vs MCQ Comparison</h2>
+        <div className="loading">Loading comparison data...</div>
+      </div>
+    );
+  }
+
+  const oeTotal = oeData.total_questions;
+  const mcqTotal = mcqData.total_questions;
+  const combined = oeTotal + mcqTotal;
+  const ratio = mcqTotal > 0 ? (oeTotal / mcqTotal).toFixed(2) : "N/A";
+
+  return (
+    <div style={{
+      border: "1px solid #e0e0e0", borderRadius: 12, padding: 28,
+      background: "#fafbfc", marginBottom: 32,
+    }}>
+      <div style={{ marginBottom: 24 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+          <div>
+            <h2 style={{ fontSize: "1.4rem", fontWeight: 700, color: "#1a1a2e", margin: "0 0 4px" }}>
+              Open-Ended vs MCQ Comparison
+            </h2>
+            <p style={{ fontSize: 13, color: "#666", lineHeight: 1.5 }}>
+              Side-by-side comparison{mcqMode === "mcq_4" ? " (MCQ 4 only)" : " (All MCQ)"}{langFilter !== "all" ? ` · ${langFilter.toUpperCase()}` : ""}
+            </p>
+          </div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <div style={{ display: "flex", gap: 2, background: "#eee", borderRadius: 6, padding: 2 }}>
+              {[{ id: "mcq_4", label: "MCQ 4" }, { id: "all_mcq", label: "All MCQ" }].map((b) => (
+                <button key={b.id} onClick={() => setMcqMode(b.id)} style={{
+                  padding: "5px 12px", borderRadius: 4, border: "none",
+                  cursor: "pointer", fontSize: 11, fontWeight: 600, transition: "all 0.15s",
+                  background: mcqMode === b.id ? "#fff" : "transparent",
+                  color: mcqMode === b.id ? "#1a1a2e" : "#999",
+                  boxShadow: mcqMode === b.id ? "0 1px 3px rgba(0,0,0,0.1)" : "none",
+                }}>{b.label}</button>
+              ))}
+            </div>
+            <div style={{ display: "flex", gap: 2, background: "#eee", borderRadius: 6, padding: 2 }}>
+              {[{ id: "all", label: "All" }, { id: "de", label: "DE" }, { id: "en", label: "EN" }].map((b) => (
+                <button key={b.id} onClick={() => setLangFilter(b.id)} style={{
+                  padding: "5px 12px", borderRadius: 4, border: "none",
+                  cursor: "pointer", fontSize: 11, fontWeight: 600, transition: "all 0.15s",
+                background: langFilter === b.id ? "#fff" : "transparent",
+                color: langFilter === b.id ? "#1a1a2e" : "#999",
+                boxShadow: langFilter === b.id ? "0 1px 3px rgba(0,0,0,0.1)" : "none",
+              }}>{b.label}</button>
+            ))}
+          </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Stat cards */}
+      <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 28 }}>
+        <StatCard label="Open-Ended" value={oeTotal.toLocaleString()} sub="total questions" accent={TYPE_COLORS["Open-Ended"]} />
+        <StatCard label="MCQ" value={mcqTotal.toLocaleString()} sub="total questions" accent={TYPE_COLORS["MCQ"]} />
+        <StatCard label="Combined" value={combined.toLocaleString()} sub="all question types" accent="#1a1a2e" />
+        <StatCard label="OE : MCQ Ratio" value={ratio} sub="open-ended per MCQ" accent="#10b981" />
+      </div>
+
+      {/* 2-column: area bars + year lines */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, marginBottom: 28 }}>
+        <ChartCard>
+          <SectionHeader num="C1" title="Area Comparison" subtitle="Open-Ended vs MCQ by legal area" />
+          <ResponsiveContainer width="100%" height={260}>
+            <BarChart data={areaComparison} margin={{ top: 10, right: 20 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#eee" />
+              <XAxis dataKey="area" stroke="#ccc" tick={{ fontSize: 11, fill: "#666" }} />
+              <YAxis stroke="#ccc" tick={{ fontSize: 11, fill: "#888" }} />
+              <Tooltip content={<CustomTooltip />} />
+              <Bar dataKey="Open-Ended" fill={TYPE_COLORS["Open-Ended"]} radius={[4, 4, 0, 0]} barSize={24} />
+              <Bar dataKey="MCQ" fill={TYPE_COLORS["MCQ"]} radius={[4, 4, 0, 0]} barSize={24} />
+            </BarChart>
+          </ResponsiveContainer>
+          <MiniLegend items={[{ label: "Open-Ended", color: TYPE_COLORS["Open-Ended"] }, { label: "MCQ", color: TYPE_COLORS["MCQ"] }]} />
+        </ChartCard>
+
+        <ChartCard>
+          <SectionHeader num="C2" title="Year Trend" subtitle="Temporal comparison of both types" />
+          <ResponsiveContainer width="100%" height={260}>
+            <LineChart data={yearComparison} margin={{ top: 10, right: 20 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#eee" />
+              <XAxis dataKey="year" stroke="#ccc" tick={{ fontSize: 12, fill: "#888" }} />
+              <YAxis stroke="#ccc" tick={{ fontSize: 11, fill: "#888" }} />
+              <Tooltip content={<CustomTooltip />} />
+              <Line type="monotone" dataKey="Open-Ended" stroke={TYPE_COLORS["Open-Ended"]} strokeWidth={2.5} dot={{ r: 4, fill: TYPE_COLORS["Open-Ended"] }} />
+              <Line type="monotone" dataKey="MCQ" stroke={TYPE_COLORS["MCQ"]} strokeWidth={2.5} dot={{ r: 4, fill: TYPE_COLORS["MCQ"] }} />
+            </LineChart>
+          </ResponsiveContainer>
+          <MiniLegend items={[{ label: "Open-Ended", color: TYPE_COLORS["Open-Ended"] }, { label: "MCQ", color: TYPE_COLORS["MCQ"] }]} />
+        </ChartCard>
+      </div>
+
+      {/* Full-width: all courses */}
+      <ChartCard>
+        <SectionHeader num="C3" title={`All Courses (${courseComparison.length})`} subtitle="Combined question count by course, split by type — sorted by total" />
+        <ResponsiveContainer width="100%" height={courseComparison.length * 32 + 40}>
+          <BarChart data={courseComparison} layout="vertical" margin={{ left: 10, right: 20 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#eee" horizontal={false} />
+            <XAxis type="number" stroke="#ccc" tick={{ fontSize: 11, fill: "#888" }} />
+            <YAxis dataKey="course" type="category" width={240} stroke="#ccc" tick={{ fontSize: 10, fill: "#666" }} />
+            <Tooltip content={<CustomTooltip />} />
+            <Bar dataKey="open" name="Open-Ended" fill={TYPE_COLORS["Open-Ended"]} radius={[0, 4, 4, 0]} barSize={12} />
+            <Bar dataKey="mcq" name="MCQ" fill={TYPE_COLORS["MCQ"]} radius={[0, 4, 4, 0]} barSize={12} />
+          </BarChart>
+        </ResponsiveContainer>
+        <MiniLegend items={[{ label: "Open-Ended", color: TYPE_COLORS["Open-Ended"] }, { label: "MCQ", color: TYPE_COLORS["MCQ"] }]} />
+      </ChartCard>
+    </div>
+  );
+}
+
+/* ── Course Summary Table ─────────────────────────────────── */
+function CourseSummaryTable() {
+  const [data, setData] = useState(null);
+  const [sortCol, setSortCol] = useState("area");
+  const [sortDir, setSortDir] = useState("asc");
+  const [areaFilter, setAreaFilter] = useState("all");
+  const [intlFilter, setIntlFilter] = useState("all");
+  const [langFilter, setLangFilter] = useState("all");
+
+  useEffect(() => {
+    fetch(`${API}/course-summary`).then((r) => r.json()).then(setData);
+  }, []);
+
+  const filtered = useMemo(() => {
+    if (!data) return [];
+    let rows = data;
+    if (areaFilter !== "all") rows = rows.filter((r) => r.area === areaFilter);
+    if (intlFilter !== "all") rows = rows.filter((r) => String(r.international) === intlFilter);
+    if (langFilter !== "all") rows = rows.filter((r) => r.language === langFilter);
+    return [...rows].sort((a, b) => {
+      let av = a[sortCol], bv = b[sortCol];
+      if (typeof av === "string") av = av.toLowerCase();
+      if (typeof bv === "string") bv = bv.toLowerCase();
+      if (av < bv) return sortDir === "asc" ? -1 : 1;
+      if (av > bv) return sortDir === "asc" ? 1 : -1;
+      return 0;
+    });
+  }, [data, sortCol, sortDir, areaFilter, intlFilter, langFilter]);
+
+  const handleSort = (col) => {
+    if (sortCol === col) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    else { setSortCol(col); setSortDir("asc"); }
+  };
+
+  if (!data) {
+    return (
+      <div style={{ border: "1px solid #e0e0e0", borderRadius: 12, padding: 28, background: "#fafbfc", marginBottom: 32 }}>
+        <h2 style={{ fontSize: "1.4rem", fontWeight: 700, color: "#1a1a2e", margin: "0 0 12px" }}>Course Summary</h2>
+        <div className="loading">Loading course data...</div>
+      </div>
+    );
+  }
+
+  const areas = [...new Set(data.map((r) => r.area))].sort();
+
+  const thStyle = (col) => ({
+    padding: "8px 12px", textAlign: "left", cursor: "pointer", userSelect: "none",
+    fontSize: 10, textTransform: "uppercase", letterSpacing: "0.1em",
+    color: sortCol === col ? "#4a6cf7" : "#888", whiteSpace: "nowrap",
+  });
+  const arrow = (col) => sortCol === col ? (sortDir === "asc" ? " \u25B2" : " \u25BC") : " \u25B8";
+
+  const langBadge = (lang) => {
+    const colors = { de: "#6366f1", en: "#f472b6", both: "#10b981" };
+    return (
+      <span style={{
+        padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 600,
+        background: `${colors[lang] || "#888"}18`, color: colors[lang] || "#888",
+      }}>{lang}</span>
+    );
+  };
+
+  return (
+    <div style={{
+      border: "1px solid #e0e0e0", borderRadius: 12, padding: 28,
+      background: "#fafbfc", marginBottom: 32,
+    }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20 }}>
+        <div>
+          <h2 style={{ fontSize: "1.4rem", fontWeight: 700, color: "#1a1a2e", margin: "0 0 4px" }}>Course Summary</h2>
+          <p style={{ fontSize: 13, color: "#666" }}>
+            {filtered.length} of {data.length} courses
+          </p>
+        </div>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <div style={{ display: "flex", gap: 2, background: "#eee", borderRadius: 6, padding: 2 }}>
+            {["all", ...areas].map((a) => (
+              <button key={a} onClick={() => setAreaFilter(a)} style={{
+                padding: "5px 12px", borderRadius: 4, border: "none",
+                cursor: "pointer", fontSize: 11, fontWeight: 600, transition: "all 0.15s",
+                background: areaFilter === a ? "#fff" : "transparent",
+                color: areaFilter === a ? "#1a1a2e" : "#999",
+                boxShadow: areaFilter === a ? "0 1px 3px rgba(0,0,0,0.1)" : "none",
+              }}>{a === "all" ? "All" : a}</button>
+            ))}
+          </div>
+          <div style={{ display: "flex", gap: 2, background: "#eee", borderRadius: 6, padding: 2 }}>
+            {[{ id: "all", label: "All" }, { id: "true", label: "Intl" }, { id: "false", label: "Domestic" }].map((b) => (
+              <button key={b.id} onClick={() => setIntlFilter(b.id)} style={{
+                padding: "5px 12px", borderRadius: 4, border: "none",
+                cursor: "pointer", fontSize: 11, fontWeight: 600, transition: "all 0.15s",
+                background: intlFilter === b.id ? "#fff" : "transparent",
+                color: intlFilter === b.id ? "#1a1a2e" : "#999",
+                boxShadow: intlFilter === b.id ? "0 1px 3px rgba(0,0,0,0.1)" : "none",
+              }}>{b.label}</button>
+            ))}
+          </div>
+          <div style={{ display: "flex", gap: 2, background: "#eee", borderRadius: 6, padding: 2 }}>
+            {[{ id: "all", label: "All" }, { id: "de", label: "DE" }, { id: "en", label: "EN" }, { id: "both", label: "Both" }].map((b) => (
+              <button key={b.id} onClick={() => setLangFilter(b.id)} style={{
+                padding: "5px 12px", borderRadius: 4, border: "none",
+                cursor: "pointer", fontSize: 11, fontWeight: 600, transition: "all 0.15s",
+                background: langFilter === b.id ? "#fff" : "transparent",
+                color: langFilter === b.id ? "#1a1a2e" : "#999",
+                boxShadow: langFilter === b.id ? "0 1px 3px rgba(0,0,0,0.1)" : "none",
+              }}>{b.label}</button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <ChartCard style={{ padding: 0 }}>
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "separate", borderSpacing: "0 2px", fontSize: 12 }}>
+            <thead>
+              <tr>
+                <th style={thStyle("area")} onClick={() => handleSort("area")}>Area{arrow("area")}</th>
+                <th style={thStyle("jurisdiction")} onClick={() => handleSort("jurisdiction")}>Jurisdiction{arrow("jurisdiction")}</th>
+                <th style={thStyle("course")} onClick={() => handleSort("course")}>Course{arrow("course")}</th>
+                <th style={thStyle("international")} onClick={() => handleSort("international")}>Intl?{arrow("international")}</th>
+                <th style={{ ...thStyle("mcq_4"), textAlign: "right" }} onClick={() => handleSort("mcq_4")}>MCQ 4{arrow("mcq_4")}</th>
+                <th style={{ ...thStyle("mcq_all"), textAlign: "right" }} onClick={() => handleSort("mcq_all")}>MCQ All{arrow("mcq_all")}</th>
+                <th style={{ ...thStyle("open_qa"), textAlign: "right" }} onClick={() => handleSort("open_qa")}>Open QA{arrow("open_qa")}</th>
+                <th style={{ ...thStyle("open_dev"), textAlign: "right" }} onClick={() => handleSort("open_dev")}>OE Dev{arrow("open_dev")}</th>
+                <th style={{ ...thStyle("open_test"), textAlign: "right" }} onClick={() => handleSort("open_test")}>OE Test{arrow("open_test")}</th>
+                <th style={thStyle("language")} onClick={() => handleSort("language")}>Lang{arrow("language")}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((r, i) => (
+                <tr key={r.course} style={{ background: i % 2 === 0 ? "#f5f7fa" : "transparent" }}>
+                  <td style={{ padding: "6px 12px" }}>
+                    <span style={{
+                      padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 600,
+                      background: `${AREA_COLORS[r.area] || "#888"}18`, color: AREA_COLORS[r.area] || "#888",
+                    }}>{r.area}</span>
+                  </td>
+                  <td style={{ padding: "6px 12px", fontSize: 11, color: "#666" }}>{r.jurisdiction}</td>
+                  <td style={{ padding: "6px 12px", fontWeight: 500, color: "#1a1a2e" }}>{r.course}</td>
+                  <td style={{ padding: "6px 12px", textAlign: "center" }}>
+                    <span style={{
+                      padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 600,
+                      background: r.international ? "#10b98118" : "#f5f5f5",
+                      color: r.international ? "#10b981" : "#aaa",
+                    }}>{r.international ? "Yes" : "No"}</span>
+                  </td>
+                  <td style={{ padding: "6px 12px", textAlign: "right", fontWeight: 600, color: "#f97316" }}>{r.mcq_4 || "—"}</td>
+                  <td style={{ padding: "6px 12px", textAlign: "right", fontWeight: 600, color: "#ea580c" }}>{r.mcq_all || "—"}</td>
+                  <td style={{ padding: "6px 12px", textAlign: "right", fontWeight: 600, color: "#6366f1" }}>{r.open_qa || "—"}</td>
+                  <td style={{ padding: "6px 12px", textAlign: "right", fontWeight: 500, color: "#818cf8" }}>{r.open_dev || "—"}</td>
+                  <td style={{ padding: "6px 12px", textAlign: "right", fontWeight: 500, color: "#4f46e5" }}>{r.open_test || "—"}</td>
+                  <td style={{ padding: "6px 12px" }}>{langBadge(r.language)}</td>
+                </tr>
+              ))}
+              {(() => {
+                const sum = (key) => filtered.reduce((s, r) => s + (r[key] || 0), 0);
+                const footerStyle = { padding: "10px 12px", textAlign: "right", fontWeight: 700, fontSize: 12, borderTop: "2px solid #ddd" };
+                return (
+                  <tr style={{ background: "#f0f2f5" }}>
+                    <td style={{ ...footerStyle, textAlign: "left" }} colSpan={4}>Total ({filtered.length} courses)</td>
+                    <td style={{ ...footerStyle, color: "#f97316" }}>{sum("mcq_4")}</td>
+                    <td style={{ ...footerStyle, color: "#ea580c" }}>{sum("mcq_all")}</td>
+                    <td style={{ ...footerStyle, color: "#6366f1" }}>{sum("open_qa")}</td>
+                    <td style={{ ...footerStyle, color: "#818cf8" }}>{sum("open_dev")}</td>
+                    <td style={{ ...footerStyle, color: "#4f46e5" }}>{sum("open_test")}</td>
+                    <td style={{ ...footerStyle, textAlign: "left" }} />
+                  </tr>
+                );
+              })()}
+            </tbody>
+          </table>
+        </div>
+      </ChartCard>
+    </div>
+  );
+}
+
 /* ── Config arrays (stable references) ────────────────────── */
 const OPEN_CONFIGS = ["open_question"];
+const MCQ_4_CONFIGS = ["mcq_4_choices"];
 const MCQ_CONFIGS = ["mcq_4_choices", "mcq_8_choices", "mcq_16_choices", "mcq_32_choices"];
+const MCQ_OPTIONS = [
+  { id: "mcq_4", label: "MCQ 4", configs: MCQ_4_CONFIGS },
+  { id: "all_mcq", label: "All MCQ", configs: MCQ_CONFIGS },
+];
 
 /* ── Main Dashboard ───────────────────────────────────────── */
 export default function Dashboard() {
@@ -562,6 +941,10 @@ export default function Dashboard() {
         </p>
       </div>
 
+      <ComparisonPanel />
+
+      <CourseSummaryTable />
+
       <DashboardPanel
         configs={OPEN_CONFIGS}
         title="Open-Ended QA"
@@ -569,7 +952,8 @@ export default function Dashboard() {
       />
 
       <DashboardPanel
-        configs={MCQ_CONFIGS}
+        configs={MCQ_4_CONFIGS}
+        configOptions={MCQ_OPTIONS}
         title="Multiple Choice (MCQ)"
         numOffset={1}
       />
