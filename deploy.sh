@@ -27,7 +27,7 @@ ssh "$SERVER" bash -s <<'EOF'
   git pull
 
   echo "Rebuilding and restarting containers..."
-  docker compose -f docker-compose.prod.yml up -d --build
+  docker compose down -v && docker compose -f docker-compose.prod.yml up -d --build
 
   echo "Cleaning up old images..."
   docker image prune -f
