@@ -263,7 +263,7 @@ export default function App() {
       </nav>
 
       <header>
-        <h1>LEXam Dataset Explorer</h1>
+        <h1>LEXam Explorer</h1>
         <p>
           {stats.total_questions.toLocaleString()} questions,{" "}
           {stats.total_variants.toLocaleString()} variants across 5 configs
