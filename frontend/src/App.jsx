@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import Dashboard from "./Dashboard";
+import Experiments from "./Experiments";
+import ExperimentDetail from "./ExperimentDetail";
 
 const API = "/api";
 
@@ -100,6 +102,20 @@ function MultiSelect({ label, options, selected, onChange, renderOption }) {
   );
 }
 
+/* ── Highlight matched text ─────────────────────────────────── */
+function HighlightText({ text, search }) {
+  if (!search || !text) return text || null;
+  const escaped = search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const parts = text.split(new RegExp(`(${escaped})`, "gi"));
+  return parts.map((part, i) =>
+    part.toLowerCase() === search.toLowerCase() ? (
+      <mark key={i} className="search-highlight">{part}</mark>
+    ) : (
+      part
+    )
+  );
+}
+
 /* ── Sortable table header ──────────────────────────────────── */
 function SortTh({ field, label, sortBy, sortDir, onSort }) {
   const active = sortBy === field;
@@ -120,6 +136,7 @@ export default function App() {
   const [stats, setStats] = useState(null);
   const [data, setData] = useState(null);
   const [selected, setSelected] = useState(null);
+  const [selectedExperimentId, setSelectedExperimentId] = useState(null);
 
   // filter state — null = "all" (no filter), [] = nothing, [...] = specific
   const [config, setConfig] = useState(null);
@@ -135,6 +152,20 @@ export default function App() {
   const [sortDir, setSortDir] = useState("asc");
   const limit = 50;
 
+  // Search state
+  const [searchTerm, setSearchTerm] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchSummary, setSearchSummary] = useState(null);
+  const [summaryOpen, setSummaryOpen] = useState(true);
+
+  // Debounce search input → searchQuery (300ms)
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setSearchQuery(searchTerm.trim());
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [searchTerm]);
+
   const suppressFilterFetch = useRef(false);
 
   const buildFilterParams = useCallback(() => {
@@ -147,8 +178,9 @@ export default function App() {
     if (year?.length) year.forEach((y) => params.append("year", y));
     if (negativeQuestion !== "") params.set("negative_question", negativeQuestion);
     if (international !== "") params.set("international", international);
+    if (searchQuery) params.set("search", searchQuery);
     return params;
-  }, [config, split, area, language, course, year, negativeQuestion, international]);
+  }, [config, split, area, language, course, year, negativeQuestion, international, searchQuery]);
 
   // Fetch stats once
   useEffect(() => {
@@ -186,7 +218,7 @@ export default function App() {
 
   useEffect(() => {
     setOffset(0);
-  }, [config, split, area, language, course, year, negativeQuestion, international, sortBy, sortDir]);
+  }, [config, split, area, language, course, year, negativeQuestion, international, searchQuery, sortBy, sortDir]);
 
   const handleSort = useCallback((field) => {
     if (sortBy === field) {
@@ -222,6 +254,18 @@ export default function App() {
     if (cleared) suppressFilterFetch.current = true;
   }, [filters]);
 
+  // Fetch search summary when search is active
+  useEffect(() => {
+    if (!searchQuery) {
+      setSearchSummary(null);
+      return;
+    }
+    const params = buildFilterParams();
+    fetch(`${API}/search-summary?${params}`)
+      .then((r) => r.json())
+      .then(setSearchSummary);
+  }, [searchQuery, buildFilterParams]);
+
   const resetFilters = useCallback(() => {
     setConfig(null);
     setSplit(null);
@@ -231,6 +275,7 @@ export default function App() {
     setYear(null);
     setNegativeQuestion("");
     setInternational("");
+    setSearchTerm("");
     setSortBy(null);
     setSortDir("asc");
   }, []);
@@ -243,14 +288,38 @@ export default function App() {
     (course !== null && course.length > 0) ||
     (year !== null && year.length > 0) ||
     negativeQuestion !== "" ||
-    international !== "";
+    international !== "" ||
+    searchQuery !== "";
+
+  if (view === "experiments") {
+    return (
+      <div>
+        <nav className="app-nav">
+          <button onClick={() => setView("explorer")}>Explorer</button>
+          <button onClick={() => setView("dashboard")}>Dashboard</button>
+          <button className="active" onClick={() => setView("experiments")}>Experiments</button>
+        </nav>
+        <div className="app">
+          {selectedExperimentId ? (
+            <ExperimentDetail
+              experimentId={selectedExperimentId}
+              onBack={() => setSelectedExperimentId(null)}
+            />
+          ) : (
+            <Experiments onSelectExperiment={(id) => setSelectedExperimentId(id)} />
+          )}
+        </div>
+      </div>
+    );
+  }
 
   if (view === "dashboard") {
     return (
       <div>
         <nav className="app-nav">
-          <button className={view === "explorer" ? "active" : ""} onClick={() => setView("explorer")}>Explorer</button>
-          <button className={view === "dashboard" ? "active" : ""} onClick={() => setView("dashboard")}>Dashboard</button>
+          <button onClick={() => setView("explorer")}>Explorer</button>
+          <button className="active" onClick={() => setView("dashboard")}>Dashboard</button>
+          <button onClick={() => { setView("experiments"); setSelectedExperimentId(null); }}>Experiments</button>
         </nav>
         <Dashboard />
       </div>
@@ -262,8 +331,9 @@ export default function App() {
   return (
     <div className="app">
       <nav className="app-nav">
-        <button className={view === "explorer" ? "active" : ""} onClick={() => setView("explorer")}>Explorer</button>
-        <button className={view === "dashboard" ? "active" : ""} onClick={() => setView("dashboard")}>Dashboard</button>
+        <button className="active" onClick={() => setView("explorer")}>Explorer</button>
+        <button onClick={() => setView("dashboard")}>Dashboard</button>
+        <button onClick={() => { setView("experiments"); setSelectedExperimentId(null); }}>Experiments</button>
       </nav>
 
       <header>
@@ -284,6 +354,65 @@ export default function App() {
           </div>
         ))}
       </div>
+
+      <div className="search-bar">
+        <span className="search-icon">&#128269;</span>
+        <input
+          type="text"
+          className="search-input"
+          placeholder="Search questions and answers..."
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)}
+        />
+        {searchTerm && (
+          <button className="search-clear" onClick={() => setSearchTerm("")}>
+            &times;
+          </button>
+        )}
+      </div>
+
+      {searchQuery && searchSummary && (
+        <div className="search-summary">
+          <button
+            className="search-summary-header"
+            onClick={() => setSummaryOpen(!summaryOpen)}
+          >
+            <span>
+              Search results for <strong>&ldquo;{searchQuery}&rdquo;</strong>
+              {" \u2014 "}{searchSummary.total} match{searchSummary.total !== 1 ? "es" : ""}
+            </span>
+            <span className="search-summary-toggle">{summaryOpen ? "\u25B4" : "\u25BE"}</span>
+          </button>
+          {summaryOpen && (
+            <div className="search-summary-body">
+              {Object.keys(searchSummary.by_area).length > 0 && (
+                <div className="search-summary-group">
+                  <span className="search-summary-label">Area</span>
+                  {Object.entries(searchSummary.by_area).map(([k, v]) => (
+                    <span key={k} className="badge badge-area">{k} ({v})</span>
+                  ))}
+                </div>
+              )}
+              {Object.keys(searchSummary.by_language).length > 0 && (
+                <div className="search-summary-group">
+                  <span className="search-summary-label">Language</span>
+                  {Object.entries(searchSummary.by_language).map(([k, v]) => (
+                    <span key={k} className="badge badge-lang">{k} ({v})</span>
+                  ))}
+                </div>
+              )}
+              {Object.keys(searchSummary.by_course).length > 0 && (
+                <div className="search-summary-group">
+                  <span className="search-summary-label">Top courses</span>
+                  {Object.entries(searchSummary.by_course).map(([k, v]) => (
+                    <span key={k} className="badge">{k} ({v})</span>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="filters">
         <MultiSelect
@@ -389,7 +518,9 @@ export default function App() {
                     <td>{row.year}</td>
                     <td>{row.negative_question === true ? "Y" : row.negative_question === false ? "N" : "—"}</td>
                     <td>{row.international === true ? "Y" : row.international === false ? "N" : "—"}</td>
-                    <td className="question-text">{row.question}</td>
+                    <td className="question-text">
+                      <HighlightText text={row.question} search={searchQuery} />
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -422,7 +553,9 @@ export default function App() {
               <span className="badge">{selected.jurisdiction}</span>
               {selected.international && <span className="badge">International</span>}
             </div>
-            <div className="question-full">{selected.question}</div>
+            <div className="question-full">
+              <HighlightText text={selected.question} search={searchQuery} />
+            </div>
 
             <h3>Variants ({selected.variants.length})</h3>
             {selected.variants.map((v) => (
@@ -435,13 +568,15 @@ export default function App() {
                   <ul className="choices-list">
                     {v.choices.map((c, i) => (
                       <li key={i} className={i === v.gold ? "correct" : ""}>
-                        {i === v.gold ? "\u2713 " : ""}{c}
+                        {i === v.gold ? "\u2713 " : ""}<HighlightText text={c} search={searchQuery} />
                       </li>
                     ))}
                   </ul>
                 )}
                 {v.answer && (
-                  <div className="question-full">{v.answer}</div>
+                  <div className="question-full">
+                    <HighlightText text={v.answer} search={searchQuery} />
+                  </div>
                 )}
               </div>
             ))}

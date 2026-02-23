@@ -754,15 +754,17 @@ function CourseSummaryTable() {
   const [langFilter, setLangFilter] = useState("all");
 
   useEffect(() => {
-    fetch(`${API}/course-summary`).then((r) => r.json()).then(setData);
-  }, []);
+    const params = new URLSearchParams();
+    if (langFilter === "de" || langFilter === "en") params.append("language", langFilter);
+    fetch(`${API}/course-summary?${params}`).then((r) => r.json()).then(setData);
+  }, [langFilter]);
 
   const filtered = useMemo(() => {
     if (!data) return [];
     let rows = data;
     if (areaFilter !== "all") rows = rows.filter((r) => r.area === areaFilter);
     if (intlFilter !== "all") rows = rows.filter((r) => String(r.international) === intlFilter);
-    if (langFilter !== "all") rows = rows.filter((r) => r.language === langFilter);
+    if (langFilter === "both") rows = rows.filter((r) => r.language === "both");
     return [...rows].sort((a, b) => {
       let av = a[sortCol], bv = b[sortCol];
       if (typeof av === "string") av = av.toLowerCase();

@@ -2,19 +2,42 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends, Query
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import func, select
+from sqlalchemy import func, select, exists, or_, inspect, text
 
 from app.database import Base, engine, get_db
 from app.models import Question, Variant
 from app.seed import seed, backfill_international
+from app.routers import experiments, generation, judging, experiment_stats
+from app.services.deepinfra import close_client
+
+
+def _migrate_experiments_table():
+    """Add missing columns to experiments table if it already exists."""
+    insp = inspect(engine)
+    if "experiments" not in insp.get_table_names():
+        return
+    existing = {c["name"] for c in insp.get_columns("experiments")}
+    migrations = {
+        "judge_system_prompt": "ALTER TABLE experiments ADD COLUMN judge_system_prompt TEXT",
+        "temperature": "ALTER TABLE experiments ADD COLUMN temperature FLOAT DEFAULT 0.7",
+        "max_tokens": "ALTER TABLE experiments ADD COLUMN max_tokens INTEGER DEFAULT 2048",
+        "judge_temperature": "ALTER TABLE experiments ADD COLUMN judge_temperature FLOAT DEFAULT 0.3",
+        "judge_max_tokens": "ALTER TABLE experiments ADD COLUMN judge_max_tokens INTEGER DEFAULT 4096",
+    }
+    with engine.begin() as conn:
+        for col, sql in migrations.items():
+            if col not in existing:
+                conn.execute(text(sql))
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
+    _migrate_experiments_table()
     seed()
     backfill_international()
     yield
+    close_client()
 
 
 app = FastAPI(title="LEXam Data Pipeline", lifespan=lifespan)
@@ -25,6 +48,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(experiments.router, prefix="/api/experiments", tags=["experiments"])
+app.include_router(generation.router, prefix="/api/experiments", tags=["generation"])
+app.include_router(judging.router, prefix="/api/experiments", tags=["judging"])
+app.include_router(experiment_stats.router, prefix="/api/experiments", tags=["experiment-stats"])
 
 # Column lookup maps for clean dispatch
 _QUESTION_COLUMNS = {
@@ -71,7 +99,23 @@ def _apply_filters(query, filters: dict, skip_field: str | None = None,
     return query
 
 
-def _viable_values(db: Session, target_field: str, active_filters: dict):
+def _apply_search(query, search: str | None):
+    """Filter questions where question text or any variant answer matches the term."""
+    if not search:
+        return query
+    term = f"%{search}%"
+    variant_match = exists(
+        select(Variant.id).where(
+            Variant.question_id == Question.id,
+            Variant.answer.ilike(term),
+        ).correlate(Question)
+    )
+    query = query.filter(or_(Question.question.ilike(term), variant_match))
+    return query
+
+
+def _viable_values(db: Session, target_field: str, active_filters: dict,
+                   search: str | None = None):
     """Return distinct values for target_field, filtered by all OTHER active selections."""
     if target_field in _VARIANT_COLUMNS:
         col = _VARIANT_COLUMNS[target_field]
@@ -82,6 +126,8 @@ def _viable_values(db: Session, target_field: str, active_filters: dict):
         col = _QUESTION_COLUMNS[target_field]
         q = db.query(col)
         q = _apply_filters(q, active_filters, skip_field=target_field)
+
+    q = _apply_search(q, search)
 
     return sorted([r[0] for r in q.distinct().all()], key=lambda v: (isinstance(v, str), v))
 
@@ -121,6 +167,7 @@ def list_questions(
     year: list[int] | None = Query(None),
     negative_question: bool | None = None,
     international: bool | None = None,
+    search: str | None = None,
     sort_by: str | None = None,
     sort_dir: str = "asc",
     offset: int = Query(0, ge=0),
@@ -141,6 +188,7 @@ def list_questions(
 
     q = db.query(Question).options(joinedload(Question.variants))
     q = _apply_filters(q, filters)
+    q = _apply_search(q, search)
 
     total = q.count()
 
@@ -202,28 +250,29 @@ def get_stats(db: Session = Depends(get_db)):
 
 
 @app.get("/api/course-summary")
-def get_course_summary(db: Session = Depends(get_db)):
+def get_course_summary(language: str | None = None, db: Session = Depends(get_db)):
     """Per-course breakdown: area, jurisdiction, international, mcq_4, mcq_all, open_qa, language."""
-    rows = (
-        db.query(
-            Question.course, Question.area, Question.jurisdiction,
-            Question.international, Question.language, Question.id,
-            Variant.config, Variant.split,
-        )
-        .join(Variant)
-        .all()
-    )
+    q = db.query(
+        Question.course, Question.area, Question.jurisdiction,
+        Question.international, Question.language, Question.id,
+        Variant.config, Variant.split,
+    ).join(Variant)
+    if language:
+        q = q.filter(Question.language == language)
+    rows = q.all()
 
     courses: dict = {}
     for course, area, juris, intl, lang, qid, config, split in rows:
         if course not in courses:
             courses[course] = {
                 "course": course, "area": area,
-                "jurisdictions": set(), "international": intl,
+                "jurisdictions": set(), "international": False,
                 "languages": set(),
                 "mcq4": set(), "mcq_all": set(),
                 "open": set(), "open_dev": set(), "open_test": set(),
             }
+        if intl:
+            courses[course]["international"] = True
         courses[course]["jurisdictions"].add(juris)
         courses[course]["languages"].add(lang)
         if config == "mcq_4_choices":
@@ -421,6 +470,7 @@ def get_filters(
     year: list[int] | None = Query(None),
     negative_question: bool | None = None,
     international: bool | None = None,
+    search: str | None = None,
     db: Session = Depends(get_db),
 ):
     active = {
@@ -435,13 +485,69 @@ def get_filters(
         "international": international,
     }
     return {
-        "configs": _viable_values(db, "config", active),
-        "splits": _viable_values(db, "split", active),
-        "areas": _viable_values(db, "area", active),
-        "languages": _viable_values(db, "language", active),
-        "courses": _viable_values(db, "course", active),
-        "jurisdictions": _viable_values(db, "jurisdiction", active),
-        "years": sorted(_viable_values(db, "year", active), reverse=True),
+        "configs": _viable_values(db, "config", active, search),
+        "splits": _viable_values(db, "split", active, search),
+        "areas": _viable_values(db, "area", active, search),
+        "languages": _viable_values(db, "language", active, search),
+        "courses": _viable_values(db, "course", active, search),
+        "jurisdictions": _viable_values(db, "jurisdiction", active, search),
+        "years": sorted(_viable_values(db, "year", active, search), reverse=True),
+    }
+
+
+@app.get("/api/search-summary")
+def search_summary(
+    search: str,
+    config: list[str] | None = Query(None),
+    split: list[str] | None = Query(None),
+    area: list[str] | None = Query(None),
+    language: list[str] | None = Query(None),
+    course: list[str] | None = Query(None),
+    jurisdiction: list[str] | None = Query(None),
+    year: list[int] | None = Query(None),
+    negative_question: bool | None = None,
+    international: bool | None = None,
+    db: Session = Depends(get_db),
+):
+    filters = {
+        "config": config,
+        "split": split,
+        "area": area,
+        "language": language,
+        "course": course,
+        "jurisdiction": jurisdiction,
+        "year": year,
+        "negative_question": negative_question,
+        "international": international,
+    }
+
+    q = db.query(Question)
+    q = _apply_filters(q, filters)
+    q = _apply_search(q, search)
+
+    total = q.count()
+
+    by_area = dict(
+        q.with_entities(Question.area, func.count())
+        .group_by(Question.area).all()
+    )
+    by_language = dict(
+        q.with_entities(Question.language, func.count())
+        .group_by(Question.language).all()
+    )
+    by_course = dict(
+        q.with_entities(Question.course, func.count())
+        .group_by(Question.course)
+        .order_by(func.count().desc())
+        .limit(10)
+        .all()
+    )
+
+    return {
+        "total": total,
+        "by_area": by_area,
+        "by_language": by_language,
+        "by_course": by_course,
     }
 
 
